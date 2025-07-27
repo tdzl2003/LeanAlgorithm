@@ -27,5 +27,5 @@ theorem fib_is_correct:
 
 -- 时间复杂度证明
 theorem fib_time_complexity:
-  IsBigO Filter.atTop (λ n => (time_cost (fib n) : ℝ)) (λ n => ((√5 + 1) / 2) ^ n) := by
+  (λ n => ((time_cost (fib n)) : ℝ)) =O[Filter.atTop] (λ n => ((√5 + 1) / 2) ^ n) := by
   sorry
