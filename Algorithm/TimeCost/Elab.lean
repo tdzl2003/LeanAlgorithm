@@ -5,12 +5,6 @@ open Lean Meta Elab Term Command
 
 open Expr
 
-def ZeroExpr := Expr.lit (.natVal 0)
-
-def Nat.succ.withCost := Nat.succ
-
-def Nat.add.withCost := Nat.add
-
 namespace Algorithm
 
 def isWithCostType(t: Expr): Bool :=
@@ -182,13 +176,5 @@ elab "#autogen_fun_with_cost" declName:ident : command => do
 
   catch e =>
     throwError m!"失败：{e.toMessageData}"
-
-def test(a b: Nat) := Nat.add a b
-
-#autogen_fun_with_cost Algorithm.test
-
-#print test.withCost
-
-#eval test.withCost 2 4
 
 end Algorithm
