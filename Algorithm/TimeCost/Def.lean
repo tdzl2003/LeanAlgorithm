@@ -13,22 +13,16 @@ namespace Algorithm
   def WithCost.wrap (a: α): WithCost α :=
     ⟨0, a⟩
 
+  @[simp]
+  def WithCost.andThen (a: WithCost α)(f: α → WithCost β): WithCost β :=
+    let r := f a.val
+    ⟨a.cost + r.cost, r.val⟩
+
   /--
     为一个结果附加额外的代价
   -/
   @[simp]
   def WithCost.addCost (a: WithCost α)(cost: Nat) : WithCost α :=
     ⟨a.cost + cost, a.val⟩
-
-  /--
-    调用一个包装函数
-  -/
-  @[simp]
-  def WithCost.apply (f: WithCost (α → WithCost β))(a: WithCost α): WithCost β :=
-    (f.val a.val).addCost (f.cost + a.cost + 1)
-
-  @[simp]
-  def WithCost.applyF{α β: Type} (f: WithCost (α → β))(a: WithCost α): WithCost (β) :=
-    WithCost.mk (f.cost + a.cost + 1) (f.val a.val)
 
 end Algorithm
