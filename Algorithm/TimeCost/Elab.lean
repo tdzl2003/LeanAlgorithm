@@ -28,11 +28,15 @@ partial def exprToWithCost(expr prevCost: Expr): MetaM Expr := do
       -- 返回具体的值并叠加prevCost
       withPrevCost expr
   | const name us =>
+      -- 是一个函数
       if type.isArrow then
         let newExpr := Expr.const (Name.str name "withCost") us
         let newExprType ← inferType newExpr
         if newExprType.isArrow then
+          -- 多元函数？可以直接调用，包装当前cost并返回
           return ← withPrevCost newExpr
+
+        -- 已经包装好的函数，附加当前cost
         let valueType := newExprType.getArg! 0
         let addCost := Expr.app (Expr.const `Algorithm.WithCost.addCost []) valueType
         return Expr.app (Expr.app addCost newExpr) prevCost
