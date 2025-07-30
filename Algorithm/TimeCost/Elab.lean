@@ -105,12 +105,12 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
           Expr.app mkCost app
 
       -- 包装Arg
-      let genApply1(f: Expr): Expr :=
+      let genApply1(f: Expr)(a: Expr): Expr :=
         if isWithCostType newAType then
           -- a.andThen λa =>...
           let AValueType := getValueType newAType
           -- f a
-          let expr := genApply f (Expr.bvar 0)
+          let expr := genApply (f.liftLooseBVars 0 1) (Expr.bvar 0)
           -- λa => f a
           let f := Expr.lam `a AValueType expr .default
           -- a.andThen
@@ -118,16 +118,16 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
           let expr := Expr.app expr AValueType
           let andThen := Expr.app expr retValType
 
-          let expr := Expr.app andThen newA
+          let expr := Expr.app andThen a
           Expr.app expr f
         else
           -- 直接调用
-          genApply f newA
+          genApply f a
 
       if isWithCostType newFType then
         -- f.andThen λf => ...
         -- f a
-        let expr := genApply1 (Expr.bvar 0)
+        let expr := genApply1 (Expr.bvar 0) (newA.liftLooseBVars 0 1)
         -- λa => f a
         let f := Expr.lam `a fValType expr .default
         -- a.andThen
@@ -139,7 +139,7 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         return Expr.app expr f
       else
         -- 直接调用
-        return genApply1 newF
+        return genApply1 newF newA
 
   | _ =>
       throwError m!"不支持的表达式类型：{expr}"

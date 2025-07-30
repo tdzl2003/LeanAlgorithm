@@ -3,7 +3,7 @@ import Algorithm
 
 open Algorithm
 
-def test(a b: Nat) := Nat.add a b
+def test(a b: Nat) := Nat.add a <| Nat.add a b
 
 #autogen_fun_with_cost test
 
@@ -11,6 +11,6 @@ def test(a b: Nat) := Nat.add a b
 
 #eval test.withCost 2 4
 
-example:  ∀ a b, (test.withCost a b).cost = 2 := by
+example:  ∀ a b, (test.withCost a b).cost = 4 := by
   unfold test.withCost
   simp
