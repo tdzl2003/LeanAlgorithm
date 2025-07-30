@@ -5,34 +5,66 @@ open Lean Meta Elab Term Command
 
 open Expr
 
+def ZeroExpr := Expr.lit (.natVal 0)
+
+/--
+  expr: 当前的表达式分支
+  prevCost: 表示之前let语句中所含所有开销的变量
+-/
 partial def exprToWithCost(expr prevCost: Expr): MetaM Expr := do
   let type ← inferType expr
   logInfo m!"Working: {expr} with type {type}"
 
+  let withPrevCost(expr: Expr): MetaM Expr := do
+    let type ← inferType expr
+    return Expr.app
+       (Expr.app (Expr.app (Expr.const `Algorithm.WithCost.mk []) type) prevCost) expr
+
   match expr with
   | fvar _ =>
-      let ret :=  Expr.app
-          (Expr.app (Expr.app (Expr.const `Algorithm.WithCost.mk []) type) prevCost)
-          expr
-      logInfo m!"Ret: {ret}"
-      return ret
+      if type.isType then
+        return expr
+
+      -- 返回具体的值并叠加prevCost
+      withPrevCost expr
+  | const name us =>
+      if type.isArrow then
+        let newExpr := Expr.const (Name.str name "withCost") us
+        let newExprType ← inferType newExpr
+        let valueType := newExprType.getArg! 0
+        let addCost := Expr.app (Expr.const `Algorithm.WithCost.addCost []) valueType
+        return Expr.app (Expr.app addCost newExpr) prevCost
+      logInfo m!"Ret"
+      withPrevCost expr
   | lam name type body bi =>
       logInfo m!"lam {name} {type} {body}"
-      return (Expr.lam name type
+      let newExpr := (Expr.lam name type
           (← withLocalDecl name bi type
             (fun fvar => do
               let body := body.instantiate1 fvar
-              let ret ← exprToWithCost body prevCost
+              let ret ← exprToWithCost body ZeroExpr
               let ret := ret.liftLooseBVars 0 1
               let ret := ret.replaceFVar fvar $ Expr.bvar 0
               return ret
             )
           )
         bi)
-  -- | app a b =>
-  --     logInfo m!"app {a} {b}"
-  --     match a with
-  --     | _ => throwError m!"TODO"
+      withPrevCost newExpr
+  | app a b =>
+      logInfo m!"app {a} {b}"
+
+      let newA ← exprToWithCost a ZeroExpr
+      let newB ← exprToWithCost b ZeroExpr
+
+      let newBType ← inferType newB
+      let newRetType := (newA.getArg! 0).getForallBody.getArg! 0
+      let newExpr := Expr.app (Expr.const `Algorithm.WithCost.apply []) (newBType.getArg! 0)
+      let newExpr := Expr.app newExpr newRetType
+      let newExpr := Expr.app newExpr newA
+      let newExpr := Expr.app newExpr newB
+      let newExprType ← inferType newExpr
+      let addCost := Expr.app (Expr.const `Algorithm.WithCost.addCost []) (newExprType.getArg! 0)
+      return Expr.app (Expr.app addCost newExpr) prevCost
   | _ =>
       throwError m!"不支持的表达式类型：{expr}"
 
@@ -50,7 +82,7 @@ elab "#autogen_fun_with_cost" declName:ident : command => do
       match info with
       | ConstantInfo.defnInfo val =>
           liftTermElabM <| do
-              let newDef := ← exprToWithCost val.value (Expr.lit (.natVal 0))
+              let newDef := ← exprToWithCost val.value ZeroExpr
               let newDefType := ← inferType newDef
               logInfo m!"新定义：{newDef}"
               let decl := .defnDecl {
@@ -69,12 +101,16 @@ elab "#autogen_fun_with_cost" declName:ident : command => do
   catch e =>
     throwError m!"失败：{e.toMessageData}"
 
-def test(a b: Nat) := a
+open Algorithm
 
-#eval Algorithm.WithCost.mk 2 2
+def Nat.succ.withCost := WithCost.wrapF1 Nat.succ
+
+def Nat.add.withCost := WithCost.wrapF2 Nat.add
+
+def test(a b: Nat) := Nat.add a b
 
 #autogen_fun_with_cost test
 
 #print test.withCost
 
-#eval test.withCost 1 2
+#eval (test.withCost.apply (WithCost.wrap 4)).apply (WithCost.wrap 2)
