@@ -31,6 +31,8 @@ partial def exprToWithCost(expr prevCost: Expr): MetaM Expr := do
       if type.isArrow then
         let newExpr := Expr.const (Name.str name "withCost") us
         let newExprType ← inferType newExpr
+        if newExprType.isArrow then
+          return ← withPrevCost newExpr
         let valueType := newExprType.getArg! 0
         let addCost := Expr.app (Expr.const `Algorithm.WithCost.addCost []) valueType
         return Expr.app (Expr.app addCost newExpr) prevCost
@@ -50,21 +52,37 @@ partial def exprToWithCost(expr prevCost: Expr): MetaM Expr := do
           )
         bi)
       withPrevCost newExpr
-  | app a b =>
-      logInfo m!"app {a} {b}"
-
+  | app f a =>
+      let newF ← exprToWithCost f ZeroExpr
       let newA ← exprToWithCost a ZeroExpr
-      let newB ← exprToWithCost b ZeroExpr
 
-      let newBType ← inferType newB
-      let newRetType := (newA.getArg! 0).getForallBody.getArg! 0
-      let newExpr := Expr.app (Expr.const `Algorithm.WithCost.apply []) (newBType.getArg! 0)
-      let newExpr := Expr.app newExpr newRetType
-      let newExpr := Expr.app newExpr newA
-      let newExpr := Expr.app newExpr newB
-      let newExprType ← inferType newExpr
-      let addCost := Expr.app (Expr.const `Algorithm.WithCost.addCost []) (newExprType.getArg! 0)
-      return Expr.app (Expr.app addCost newExpr) prevCost
+      logInfo m!"app {f} {a}"
+      let newFType ← inferType newF
+      let newAType ← inferType newA
+
+      let fRetType := (newFType.getArg! 0).bindingBody!
+
+      -- newF 的返回值类型可能是 WithCost f 也可能是 f（多元函数），支持f的情况
+      if fRetType.isArrow then
+        let newRetType := fRetType
+        logInfo m!"newFType: {newFType}"
+        let newExpr := Expr.app (Expr.const `Algorithm.WithCost.applyF []) (newAType.getArg! 0)
+        let newExpr := Expr.app newExpr newRetType
+        let newExpr := Expr.app newExpr newF
+        let newExpr := Expr.app newExpr newA
+        let newExprType ← inferType newExpr
+        let addCost := Expr.app (Expr.const `Algorithm.WithCost.addCost []) (newExprType.getArg! 0)
+        return Expr.app (Expr.app addCost newExpr) prevCost
+      else
+        let newRetType := fRetType.getArg! 0
+        logInfo m!"newFType: {newFType}"
+        let newExpr := Expr.app (Expr.const `Algorithm.WithCost.apply []) (newAType.getArg! 0)
+        let newExpr := Expr.app newExpr newRetType
+        let newExpr := Expr.app newExpr newF
+        let newExpr := Expr.app newExpr newA
+        let newExprType ← inferType newExpr
+        let addCost := Expr.app (Expr.const `Algorithm.WithCost.addCost []) (newExprType.getArg! 0)
+        return Expr.app (Expr.app addCost newExpr) prevCost
   | _ =>
       throwError m!"不支持的表达式类型：{expr}"
 
@@ -103,9 +121,9 @@ elab "#autogen_fun_with_cost" declName:ident : command => do
 
 open Algorithm
 
-def Nat.succ.withCost := WithCost.wrapF1 Nat.succ
+def Nat.succ.withCost(a: Nat) := WithCost.wrap $ Nat.succ a
 
-def Nat.add.withCost := WithCost.wrapF2 Nat.add
+def Nat.add.withCost(a b: Nat) := WithCost.wrap $ Nat.add a b
 
 def test(a b: Nat) := Nat.add a b
 
