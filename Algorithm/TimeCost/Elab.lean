@@ -100,10 +100,11 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
       logInfo m!"retValType {retValType}"
 
       -- 最内层的调用
-      let genApply(f: Expr)(a: Expr): Expr :=
+      let genApply(f: Expr)(a: Expr): MetaM Expr := do
         let app := Expr.app f a
+        let retType ← inferType app
         if isPropOrTypeFuncType newAType ∨ isPropOrTypeFuncType retType then
-          app
+          return app
         else
           if isWithCostType retType then
             -- 返回值带Cost，增加消耗 ret.addCost 1
@@ -111,21 +112,30 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
             let addCost := Expr.const `Algorithm.WithCost.addCost []
             let addCost := Expr.app addCost retValueType
             let addCost := Expr.app addCost app
-            Expr.app addCost (Expr.lit (.natVal 1))
+            return Expr.app addCost (Expr.lit (.natVal 1))
           else
             -- 返回值不带Cost，构造消耗 {cost:= 1, val:= ret}
             let mkCost := Expr.const `Algorithm.WithCost.mk []
             let mkCost := Expr.app mkCost retType
             let mkCost := Expr.app mkCost (Expr.lit (.natVal 1))
-            Expr.app mkCost app
+            return Expr.app mkCost app
 
       -- 包装Arg
-      let genApply1(f: Expr)(a: Expr): Expr :=
+      let genApply1(f: Expr)(a: Expr): MetaM Expr := do
+
         if isWithCostType newAType then
           -- a.andThen λa =>...
+          let newAType ← inferType a
           let AValueType := getValueType newAType
-          -- f a
-          let expr := genApply (f.liftLooseBVars 0 1) (Expr.bvar 0)
+          -- ...
+          let expr ← withLocalDecl `a BinderInfo.default AValueType fun fvar => do
+            let ret  ← genApply f fvar
+            let ret := ret.liftLooseBVars 0 1
+            let ret := ret.replaceFVar fvar $ Expr.bvar 0
+            return ret
+
+          let retType := ← inferType expr
+          let retValType := getValueType retType
           -- λa => f a
           let f := Expr.lam `a AValueType expr .default
           -- a.andThen
@@ -134,15 +144,19 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
           let andThen := Expr.app expr retValType
 
           let expr := Expr.app andThen a
-          Expr.app expr f
+          return Expr.app expr f
         else
           -- 直接调用
-          genApply f a
+          return ← genApply f a
 
       if isWithCostType newFType then
         -- f.andThen λf => ...
-        -- f a
-        let expr := genApply1 (Expr.bvar 0) (newA.liftLooseBVars 0 1)
+        let expr ← withLocalDecl `a BinderInfo.default fValType fun fvar => do
+          let ret ← genApply1 fvar newA
+          let ret := ret.liftLooseBVars 0 1
+          let ret := ret.replaceFVar fvar $ Expr.bvar 0
+          return ret
+
         -- λa => f a
         let f := Expr.lam `a fValType expr .default
         -- a.andThen
@@ -154,7 +168,8 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         return Expr.app expr f
       else
         -- 直接调用
-        return genApply1 newF newA
+        return ← genApply1 newF newA
+
   | forallE binderName binderType body binderInfo =>
       return expr
   | _ =>
