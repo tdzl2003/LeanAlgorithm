@@ -17,7 +17,7 @@ def getValueType(t: Expr): Expr :=
     t
 
 partial def isPropOrTypeFuncType(t: Expr): Bool :=
-  t.isType ∨ t.isProp ∨ t.isArrow ∧ isPropOrTypeFuncType t.bindingBody!
+  t.isType ∨ t.isProp ∨ t.isSort ∨ t.isArrow ∧ isPropOrTypeFuncType t.bindingBody!
 
 /--
   expr: 当前的表达式分支
@@ -156,9 +156,7 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         -- 直接调用
         return genApply1 newF newA
   | forallE binderName binderType body binderInfo =>
-      let binderType ← exprToWithCost binderType none
-      let binderBody ← exprToWithCost body none
-      return .forallE binderName binderType binderBody binderInfo
+      return expr
   | _ =>
       throwError m!"不支持的表达式类型：{expr}"
 
