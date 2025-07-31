@@ -16,6 +16,9 @@ def getValueType(t: Expr): Expr :=
   else
     t
 
+partial def isPropOrTypeFuncType(t: Expr): Bool :=
+  t.isType ∨ t.isProp ∨ t.isArrow ∧ isPropOrTypeFuncType t.bindingBody!
+
 /--
   expr: 当前的表达式分支
   prevCost: 表示之前let语句中所含所有开销的变量
@@ -23,6 +26,10 @@ def getValueType(t: Expr): Expr :=
 partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
   let type ← inferType expr
   logInfo m!"Working: {expr} with type {type}"
+  if type.isType then
+    return expr
+  if type.isProp then
+    return expr
 
   let withPrevCost(expr: Expr): MetaM Expr := do
     match prevCost with
@@ -43,10 +50,9 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
 
   match expr with
   | fvar _ =>
-      if type.isType then
-        return expr
-
       -- 返回具体的值并叠加prevCost
+      withPrevCost expr
+  | lit _ =>
       withPrevCost expr
   | const name us =>
       -- 是一个函数
@@ -59,7 +65,6 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
 
         -- 已经包装好的函数，附加当前cost
         return ← addPrevCost newExpr
-      logInfo m!"Ret"
       withPrevCost expr
   | lam name type body bi =>
       logInfo m!"lam {name} {type} {body}"
@@ -75,12 +80,18 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
           )
         bi)
       withPrevCost newExpr
+  | proj typeName idx struct =>
+      return expr
   | app f a =>
       let newF ← exprToWithCost f none
       let newA ← exprToWithCost a none
+      logInfo m!"{f} ==> {newF}"
+      logInfo m!"{a} ==> {newA}"
       let newFType ← inferType newF
       let newAType ← inferType newA
       let fValType := getValueType newFType
+      if ¬ fValType.isBinding then
+        throwError m!"{newF}: {fValType.isBinding} 不是函数"
       let retType := fValType.bindingBody!
       let retValType := getValueType retType
 
@@ -89,20 +100,22 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
       -- 最内层的调用
       let genApply(f: Expr)(a: Expr): Expr :=
         let app := Expr.app f a
-
-        if isWithCostType retType then
-          -- 带类型调用，增加消耗 ret.addCost 1
-          let retValueType := getValueType retType
-          let addCost := Expr.const `Algorithm.WithCost.addCost []
-          let addCost := Expr.app addCost retValueType
-          let addCost := Expr.app addCost app
-          Expr.app addCost (Expr.lit (.natVal 1))
+        if isPropOrTypeFuncType newAType then
+          app
         else
-          -- 不带类型调用，构造消耗 {cost:= 1, val:= ret}
-          let mkCost := Expr.const `Algorithm.WithCost.mk []
-          let mkCost := Expr.app mkCost retType
-          let mkCost := Expr.app mkCost (Expr.lit (.natVal 1))
-          Expr.app mkCost app
+          if isWithCostType retType then
+            -- 带类型调用，增加消耗 ret.addCost 1
+            let retValueType := getValueType retType
+            let addCost := Expr.const `Algorithm.WithCost.addCost []
+            let addCost := Expr.app addCost retValueType
+            let addCost := Expr.app addCost app
+            Expr.app addCost (Expr.lit (.natVal 1))
+          else
+            -- 不带类型调用，构造消耗 {cost:= 1, val:= ret}
+            let mkCost := Expr.const `Algorithm.WithCost.mk []
+            let mkCost := Expr.app mkCost retType
+            let mkCost := Expr.app mkCost (Expr.lit (.natVal 1))
+            Expr.app mkCost app
 
       -- 包装Arg
       let genApply1(f: Expr)(a: Expr): Expr :=
