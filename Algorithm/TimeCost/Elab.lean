@@ -26,10 +26,6 @@ partial def isPropOrTypeFuncType(t: Expr): Bool :=
 partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
   let type ← inferType expr
   logInfo m!"Working: {expr} with type {type}"
-  if type.isType then
-    return expr
-  if type.isProp then
-    return expr
 
   let withPrevCost(expr: Expr): MetaM Expr := do
     match prevCost with
@@ -81,7 +77,13 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         bi)
       withPrevCost newExpr
   | proj typeName idx struct =>
-      return expr
+      let newStruct ← exprToWithCost struct none
+      let newStructType ← inferType newStruct
+      logInfo m!"newStruct={newStruct} newStructType={newStructType}"
+      if isWithCostType newStructType then
+        throwError m!"TODO"
+      else
+        return expr
   | app f a =>
       let newF ← exprToWithCost f none
       let newA ← exprToWithCost a none
@@ -100,18 +102,18 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
       -- 最内层的调用
       let genApply(f: Expr)(a: Expr): Expr :=
         let app := Expr.app f a
-        if isPropOrTypeFuncType newAType then
+        if isPropOrTypeFuncType newAType ∨ isPropOrTypeFuncType retType then
           app
         else
           if isWithCostType retType then
-            -- 带类型调用，增加消耗 ret.addCost 1
+            -- 返回值带Cost，增加消耗 ret.addCost 1
             let retValueType := getValueType retType
             let addCost := Expr.const `Algorithm.WithCost.addCost []
             let addCost := Expr.app addCost retValueType
             let addCost := Expr.app addCost app
             Expr.app addCost (Expr.lit (.natVal 1))
           else
-            -- 不带类型调用，构造消耗 {cost:= 1, val:= ret}
+            -- 返回值不带Cost，构造消耗 {cost:= 1, val:= ret}
             let mkCost := Expr.const `Algorithm.WithCost.mk []
             let mkCost := Expr.app mkCost retType
             let mkCost := Expr.app mkCost (Expr.lit (.natVal 1))
@@ -153,7 +155,10 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
       else
         -- 直接调用
         return genApply1 newF newA
-
+  | forallE binderName binderType body binderInfo =>
+      let binderType ← exprToWithCost binderType none
+      let binderBody ← exprToWithCost body none
+      return .forallE binderName binderType binderBody binderInfo
   | _ =>
       throwError m!"不支持的表达式类型：{expr}"
 
