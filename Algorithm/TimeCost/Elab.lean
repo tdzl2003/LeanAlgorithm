@@ -17,7 +17,20 @@ def getValueType(t: Expr): Expr :=
     t
 
 partial def isPropOrTypeFuncType(t: Expr): Bool :=
-  t.isType ∨ t.isProp ∨ t.isSort ∨ t.isArrow ∧ isPropOrTypeFuncType t.bindingBody!
+  t.isType ∨ t.isProp ∨ t.isSort ∨ t.isForall ∧ isPropOrTypeFuncType t.bindingBody!
+
+-- 处理出现的所有类型，为所有函数的最终返回值增加WithCost
+def withCostForLastReturnType(type: Expr): Expr :=
+  match type with
+  | forallE binderName binderType body binderInfo =>
+        let binderType := if binderType.isForall then withCostForLastReturnType binderType else binderType
+        let body := withCostForLastReturnType body
+        .forallE binderName binderType body binderInfo
+  | _ =>
+    if isPropOrTypeFuncType type then
+      type
+    else
+      Expr.app (Expr.const `Algorithm.WithCost []) type
 
 /--
   expr: 当前的表达式分支
@@ -45,17 +58,20 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
           (Expr.app (Expr.app (Expr.const `Algorithm.WithCost.addCost []) valueType) expr) prevCost
 
   match expr with
-  | fvar _ =>
+  | fvar fvarId =>
+      logInfo m!"fvar {fvarId.name}"
       -- 返回具体的值并叠加prevCost
       withPrevCost expr
   | lit _ =>
+      logInfo m!"lit {expr}"
       withPrevCost expr
   | const name us =>
       -- 是一个函数
-      if type.isArrow then
+      logInfo m!"const {expr} {type} {type.isForall}"
+      if type.isForall then
         let newExpr := Expr.const (Name.str name "withCost") us
         let newExprType ← inferType newExpr
-        if newExprType.isArrow then
+        if newExprType.isForall then
           -- 多元函数？可以直接调用，包装当前cost并返回
           return ← withPrevCost newExpr
 
@@ -64,6 +80,7 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
       withPrevCost expr
   | lam name type body bi =>
       logInfo m!"lam {name} {type} {body}"
+      let type := if type.isForall then withCostForLastReturnType type else type
       let newExpr := (Expr.lam name type
           (← withLocalDecl name bi type
             (fun fvar => do
@@ -77,6 +94,7 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         bi)
       withPrevCost newExpr
   | proj typeName idx struct =>
+      logInfo m!"proj {typeName} {idx} {struct}"
       let newStruct ← exprToWithCost struct none
       let newStructType ← inferType newStruct
       logInfo m!"newStruct={newStruct} newStructType={newStructType}"
@@ -85,6 +103,9 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
       else
         return expr
   | app f a =>
+      logInfo m!"app {f} {a}"
+      if type.isType ∨ type.isProp then
+        return expr
       let newF ← exprToWithCost f none
       let newA ← exprToWithCost a none
       logInfo m!"{f} ==> {newF}"
@@ -96,8 +117,6 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         throwError m!"{newF}: {fValType.isBinding} 不是函数"
       let retType := fValType.bindingBody!
       let retValType := getValueType retType
-
-      logInfo m!"retValType {retValType}"
 
       -- 最内层的调用
       let genApply(f: Expr)(a: Expr): MetaM Expr := do
@@ -171,7 +190,9 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         return ← genApply1 newF newA
 
   | forallE binderName binderType body binderInfo =>
-      return expr
+      let binderType := if binderType.isForall then withCostForLastReturnType binderType else binderType
+      let body := withCostForLastReturnType body
+      return .forallE binderName binderType body binderInfo
   | _ =>
       throwError m!"不支持的表达式类型：{expr}"
 
