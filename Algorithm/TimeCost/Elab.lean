@@ -17,7 +17,7 @@ def getValueType(t: Expr): Expr :=
     t
 
 partial def isPropOrTypeFuncType(t: Expr): Bool :=
-  t.isType ∨ t.isProp ∨ t.isSort ∨ t.isForall ∧ isPropOrTypeFuncType t.bindingBody!
+  t.isSort ∨ t.isForall ∧ isPropOrTypeFuncType t.bindingBody!
 
 -- 处理出现的所有类型，为所有函数的最终返回值增加WithCost
 def withCostForLastReturnType(type: Expr): Expr :=
@@ -39,6 +39,10 @@ def withCostForLastReturnType(type: Expr): Expr :=
 partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
   let type ← inferType expr
   logInfo m!"Working: {expr} with type {type}"
+
+  let typetype ← inferType type
+  if typetype.isProp then
+    return expr
 
   let withPrevCost(expr: Expr): MetaM Expr := do
     match prevCost with
@@ -68,6 +72,7 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
   | const name us =>
       -- 是一个函数
       logInfo m!"const {expr} {type} {type.isForall}"
+
       if type.isForall then
         let newExpr := Expr.const (Name.str name "withCost") us
         let newExprType ← inferType newExpr
@@ -79,8 +84,10 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         return ← addPrevCost newExpr
       withPrevCost expr
   | lam name type body bi =>
-      logInfo m!"lam {name} {type} {body}"
-      let type := if type.isForall then withCostForLastReturnType type else type
+      let typetype ← inferType type
+      logInfo m!"lam name={name} type={type} body={body} typetype={typetype} typetype.sortLevel={typetype.sortLevel!}"
+      let type := if type.isForall ∧ typetype.sortLevel! == 1 then withCostForLastReturnType type else type
+      logInfo m!"{type}"
       let newExpr := (Expr.lam name type
           (← withLocalDecl name bi type
             (fun fvar => do
@@ -104,19 +111,16 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
         return expr
   | app f a =>
       logInfo m!"app {f} {a}"
-      if type.isType ∨ type.isProp then
+      let typetype ← inferType type
+      if type.isType ∨ type.isProp ∨ typetype.sortLevel! != 1 then
         return expr
       let newF ← exprToWithCost f none
       let newA ← exprToWithCost a none
-      logInfo m!"{f} ==> {newF}"
-      logInfo m!"{a} ==> {newA}"
+      logInfo m!"mapping f: {f} ==> {newF}"
+      logInfo m!"mapping a: {a} ==> {newA}"
       let newFType ← inferType newF
       let newAType ← inferType newA
       let fValType := getValueType newFType
-      if ¬ fValType.isBinding then
-        throwError m!"{newF}: {fValType.isBinding} 不是函数"
-      let retType := fValType.bindingBody!
-      let retValType := getValueType retType
 
       -- 最内层的调用
       let genApply(f: Expr)(a: Expr): MetaM Expr := do
@@ -147,16 +151,16 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
           let newAType ← inferType a
           let AValueType := getValueType newAType
           -- ...
-          let expr ← withLocalDecl `a BinderInfo.default AValueType fun fvar => do
-            let ret  ← genApply f fvar
+          let expr ← withLocalDecl `a BinderInfo.default AValueType fun avar => do
+            let ret ← genApply f avar
             let ret := ret.liftLooseBVars 0 1
-            let ret := ret.replaceFVar fvar $ Expr.bvar 0
+            let ret := ret.replaceFVar avar $ Expr.bvar 0
             return ret
 
-          let retType := ← inferType expr
-          let retValType := getValueType retType
           -- λa => f a
           let f := Expr.lam `a AValueType expr .default
+          let fType ← inferType f
+          let retValType := getValueType fType.bindingBody!
           -- a.andThen
           let expr := Expr.const `Algorithm.WithCost.andThen []
           let expr := Expr.app expr AValueType
@@ -170,14 +174,18 @@ partial def exprToWithCost(expr: Expr)(prevCost: Option Expr): MetaM Expr := do
 
       if isWithCostType newFType then
         -- f.andThen λf => ...
-        let expr ← withLocalDecl `a BinderInfo.default fValType fun fvar => do
+
+        let expr ← withLocalDecl `f BinderInfo.default fValType fun fvar => do
           let ret ← genApply1 fvar newA
           let ret := ret.liftLooseBVars 0 1
           let ret := ret.replaceFVar fvar $ Expr.bvar 0
           return ret
 
+
         -- λa => f a
         let f := Expr.lam `a fValType expr .default
+        let fType ← inferType f
+        let retValType := getValueType fType.bindingBody!
         -- a.andThen
         let expr := Expr.const `Algorithm.WithCost.andThen []
         let expr := Expr.app expr fValType
